@@ -1,6 +1,7 @@
 var domino = require('../lib');
 var fs = require('fs');
 var html = fs.readFileSync(__dirname + '/fixture/doc.html', 'utf8');
+var should = require("should");
 
 exports = exports.domino = {};
 
@@ -184,9 +185,9 @@ exports.attributes2 = function() {
 exports.jquery1_9 = function() {
   var window = domino.createWindow(html);
   var f = __dirname + '/fixture/jquery-1.9.1.js';
-  window._run(fs.readFileSync(f, 'utf8'), f);
-  window.$.should.be.ok();
-  window.$('.foo').should.have.length(3);
+  window._run(fs.readFileSync(f, 'utf8'));
+  should(window.$).be.ok();
+  should(window.$('.foo')).have.length(3);
 };
 
 exports.jquery2_2 = function() {

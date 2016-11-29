@@ -36,7 +36,7 @@ var blacklist = [
   /dynamic-markup-insertion document-write script_00[2456789]/,
   /dynamic-markup-insertion document-write script_01[0123]/,
   /dynamic-markup-insertion document-writeln document.writeln-0[123]/,
-  /dynamic-markup-insertion opening-the-input-stream 00[1789]/,
+  /dynamic-markup-insertion opening-the-input-stream 00[12789]/,
   'dynamic-markup-insertion opening-the-input-stream 010-2',
   /dynamic-markup-insertion opening-the-input-stream 01[123456]-1/,
   'dynamic-markup-insertion opening-the-input-stream document.open-01',
@@ -69,6 +69,16 @@ var blacklist = [
   'elements global-attributes the-translate-attribute-010',
   'elements global-attributes the-translate-attribute-011',
   'elements global-attributes the-translate-attribute-012',
+  'reflection-embedded',
+  'reflection-forms',
+  'reflection-grouping',
+  'reflection-metadata',
+  'reflection-misc',
+  'reflection-obsolete',
+  'reflection-sections',
+  'reflection-original',
+  'reflection-tabular',
+  'reflection-text',
   
   // web-platform-tests/dom/nodes
   'CharacterData-appendChild',
@@ -99,7 +109,6 @@ var blacklist = [
   'Document-createElementNS',
   'Document-createEvent',
   'Document-createProcessingInstruction',
-  'Document-createTextNode',
   'Document-createTreeWalker',
   'Document-getElementById',
   'Document-getElementsByTagName',
@@ -146,7 +155,6 @@ var blacklist = [
   'Node-cloneNode',
   'Node-compareDocumentPosition',
   'Node-constants',
-  'Node-contains',
   'Node-insertBefore',
   'Node-isConnected',
   'Node-isEqualNode',
@@ -197,16 +205,16 @@ function read(file) {
   return fs.readFileSync(Path.resolve(__dirname, '..', file), 'utf8');
 }
 
-var testharness = read(__dirname + '/web-platform-tests/resources/testharness.js');
+var testRoot = Path.join(__dirname, "web-platform-tests");
 
-function list(base, dir, fn) {
+function mapFilesIn(base, dir, fn) {
   var result = {};
   var fulldir = Path.resolve(__dirname, '..', base, dir);
   fs.readdirSync(fulldir).forEach(function(file) {
     var path = Path.join(dir, file);
     var stat = fs.statSync(Path.join(fulldir, file));
     if (stat.isDirectory()) {
-      result[file] = list(base, path, fn);
+      result[file] = mapFilesIn(base, path, fn);
     }
     else if (file.match(/\.x?html$/)) {
       var test = fn(path, Path.join(fulldir, file));
@@ -219,50 +227,17 @@ function list(base, dir, fn) {
 var harness = function() {
   var paths = [].slice.call(arguments);
   return paths.map(function (path) {
-    return list(path, '', function(name, file) {
+    return mapFilesIn(path, '', function(name, file) {      
       var html = read(file);
       var window = domino.createWindow(html);
-      window._run(testharness);
       var scripts = window.document.getElementsByTagName('script');
-      scripts = [].slice.call(scripts);
+      var scriptContent = [].map.call(scripts, (s) => getScriptContents(file, s));
 
-      return function() {
-        var listen = onBlacklist(name) ? function listenForSuccess() {
-          add_completion_callback(function(tests, status) {
-            var failed = tests.filter(function(t) {
-              return t.status === t.FAIL || t.status === t.TIMEOUT;
-            });
-            if (failed.length===0) {
-              throw new Error("Expected blacklisted test to fail");
-            }
-          });
-        } : function listenForFailures() {
-          add_completion_callback(function(tests, status) {
-            var failed = tests.filter(function(t) {
-              return t.status === t.FAIL || t.status === t.TIMEOUT;
-            });
-            if (failed.length) {
-              throw new Error(failed[0].name+": "+failed[0].message);
-            }
-          });
-        };
-        window._run("(" + listen.toString() + ")();");
-
-        var concatenatedScripts = scripts.map(function(script) {
-          if (/^text\/plain$/.test(script.getAttribute('type')||'')) {
-            return '';
-          }
-          return script.textContent + '\n';
-        }).join("\n");
-        // Workaround for https://github.com/w3c/web-platform-tests/pull/3984
-        concatenatedScripts = 'var x;\n' + concatenatedScripts;
-        concatenatedScripts += '\nwindow.dispatchEvent(new Event("load"));';
-
-        var go = function() {
-          window._run(concatenatedScripts);
-        };
+      return function runTest() {
         try {
-          go();
+          scriptContent.forEach((content) => window._run(content));
+          window._run("\n(" + buildResultListener(name).toString() + ")();");
+          window._run("\nwindow.dispatchEvent(new Event('load'));");
         } catch (e) {
           if ((!onBlacklist(name)) ||
               /^Expected blacklisted test to fail/.test(e.message||'')) {
@@ -273,6 +248,57 @@ var harness = function() {
     })
   });
 };
+
+function getScriptContents(htmlFilePath, scriptTag) {
+  if (/^text\/plain$/.test(scriptTag.getAttribute('type')||'')) {
+    return '';
+  } else if (scriptTag.getAttribute("src")) {
+    var src = scriptTag.getAttribute("src");
+    if (/^data:/.test(src)) {
+      if (/^data:text\/plain,/.test(src)) {
+        return src.substring(16);
+      } else {
+        throw new Error("Script src specified with unknown data encoding");
+      }
+    } else {
+      var scriptPath = src[0] === "/" ?
+          Path.resolve(testRoot, src.substring(1)) :
+          Path.resolve(Path.dirname(htmlFilePath), src);
+      if (!fs.existsSync(scriptPath) || fs.statSync(scriptPath).isDirectory()) {
+        console.error(htmlFilePath, "requested", src, "which resolved to missing file: ", scriptPath);
+        return "";
+      } else {
+        return fs.readFileSync(scriptPath, 'utf8') + '\n//@ sourceURL=' + src;
+      }
+    }
+  } else {
+    return scriptTag.textContent;
+  }
+}
+
+function buildResultListener(testName) {
+  return onBlacklist(testName) ? function listenForSuccess() {
+    if (!window.add_completion_callback) return;
+    add_completion_callback(function(tests, status) {
+      var failed = tests.filter(function(t) {
+        return t.status === t.FAIL || t.status === t.TIMEOUT;
+      });
+      if (failed.length===0) {
+        throw new Error("Expected blacklisted test to fail");
+      }
+    });
+  } : function listenForFailures() {
+    if (!window.add_completion_callback) return;
+    add_completion_callback(function(tests, status) {
+      var failed = tests.filter(function(t) {
+        return t.status === t.FAIL || t.status === t.TIMEOUT;
+      });
+      if (failed.length) {
+        throw new Error(failed[0].name+": "+failed[0].message);
+      }
+    });
+  };
+}
 
 module.exports = harness(__dirname + '/web-platform-tests/html/dom',
                          __dirname + '/web-platform-tests/dom/nodes');
