@@ -231,11 +231,11 @@ var harness = function() {
       var html = read(file);
       var window = domino.createWindow(html);
       var scripts = window.document.getElementsByTagName('script');
-      var scriptContent = [].map.call(scripts, (s) => getScriptContents(file, s));
+      var scriptContent = [].map.call(scripts, function (s) { return getScriptContents(file, s) });
 
       return function runTest() {
         try {
-          scriptContent.forEach((content) => window._run(content));
+          scriptContent.forEach(function (content) { window._run(content) });
           window._run("\n(" + buildResultListener(name).toString() + ")();");
           window._run("\nwindow.dispatchEvent(new Event('load'));");
         } catch (e) {
